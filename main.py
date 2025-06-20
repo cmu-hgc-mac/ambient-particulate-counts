@@ -25,7 +25,14 @@ PM2_5_PER_LITRE         = 11
 PM5_PER_LITRE           = 12
 PM10_PER_LITRE          = 13
 
-
+def wifi_connect(ssid, password):
+    while wlan.isconnected() == False:
+        wlan.connect(ssid, password)
+        print('Connecting to wifi...')
+        time.sleep(5)
+    print("Connected to "+ ssid)
+    return(None)
+        
 def UTC_DST_adj(): ### Daylight Savings Time accounted for: https://forum.micropython.org/viewtopic.php?f=2&t=4034
     inst = "CMU"
     now=time.time()
@@ -60,6 +67,7 @@ def UTC_DST_adj(): ### Daylight Savings Time accounted for: https://forum.microp
 def get_timestamp():
     lt=UTC_DST_adj()
     lt_str = []
+#    lt = time.localtime(time.time())
     for item in lt:
         if item < 10:
             item = "0" + str(item)
@@ -68,7 +76,6 @@ def get_timestamp():
         lt_str.append(item)
     local_time = lt_str[0]+'-'+lt_str[1]+'-'+lt_str[2]+' '+lt_str[3]+':'+lt_str[4]+':'+lt_str[5]
     return(local_time)
-
 
 def particulates(particulate_data, measure):
     # covert deciliter to cubic meter to match ISO chart: 10,000 deciliters in 1 cubic meter
@@ -127,23 +134,18 @@ def particulate_run():
 ### Initialization ###
 
 ### Database login
-db_host = ''
-db_user = ''
-db_password = ''
-db_database = ''
-log_location = ''
-    
+db_host = 'cmsmac04.phys.cmu.edu'
+db_user = 'shipper'
+db_password = 'hgcal'
+db_database = 'hgcdb'
+log_location = 'main_clean_room'
 
 ### Connect to wifi
-ssid = ''
+ssid = 'CMU-DEVICE'
 password = ""
 wlan = network.WLAN(network.STA_IF)
 wlan.active(True)
-while wlan.isconnected() == False:
-    wlan.connect(ssid, password)
-    print('Connecting to wifi...')
-    time.sleep(5)
-print("Connected to "+ ssid)
+wifi_connect(ssid, password)
 #print("MAC address is " + ubinascii.hexlify(wlan.config('mac')).decode())
 
 ### Sync with NTP
@@ -158,21 +160,20 @@ while NTPerror == True:
         time.sleep(3)
 print("Clock synced with NTP")    
 
-#rtc = RTC() ### sync time 
-
-### Connect to Local DB
-print("Connecting to local DB...")
-conn = micropg_lite.connect(host=db_host,
+def log_to_DB(ssid, password, db_host, db_user, db_password, db_database):
+    start_time = time.ticks_ms()
+    wifi_connect(ssid, password)
+    try:
+        print("Connecting to local DB...")
+        conn = micropg_lite.connect(host=db_host,
                         user=db_user,
                         password=db_password,
                         database=db_database)
-print("Connected to local DB")
-cur = conn.cursor()
-
-check_freq = 60*60 ### check every hour
-
-while True:
-    start_time = time.ticks_ms()
+        print("Connected to local DB")
+    except OSError:
+        print("Unable to connect to DB, try again in 1 minute")
+        return(60)
+    cur = conn.cursor()
     log_timestamp = get_timestamp()
     pm0_5, pm1, pm5 = particulate_run()
     print("*****************************")
@@ -183,9 +184,10 @@ while True:
     print("*****************************")
     cur.execute("INSERT INTO particulate_counts (log_timestamp, log_location, prtcls_per_cubic_m_500nm, prtcls_per_cubic_m_1um, prtcls_per_cubic_m_5um) VALUES (%s, %s, %s, %s, %s)", [log_timestamp, log_location, pm0_5, pm1, pm5])
     conn.commit()
-    end_time = time.ticks_ms()
-    duration = (end_time - start_time)/1000
-    print("counts took "+ str(duration) + " seconds to measure")
-    time.sleep(check_freq - duration)
-    
-conn.close()
+    conn.close()
+    return(3600-((time.ticks_ms()-start_time)/1000))
+
+
+while True:
+    log_time = log_to_DB(ssid, password, db_host, db_user, db_password, db_database)
+    time.sleep(log_time)
